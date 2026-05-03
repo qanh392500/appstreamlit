@@ -1,0 +1,12 @@
+output/
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.spec
+vntax_env/
+*.log
+*.html
+page1.html
+detail1.html
