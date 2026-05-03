@@ -270,7 +270,7 @@ def fetch_detail_worker(args):
     ngay_hd, tinh_trang = parse_detail(html)
     return item, ngay_hd, tinh_trang
 
-def crawl(selected_provinces, log_q, progress_q, stop_event, threads, date_from, date_to):
+def crawl(selected_provinces, log_q, progress_q, stop_event, threads, date_from, date_to, max_pages_default=50, max_pages_per_prov=None):
     total_prov = len(selected_provinces)
 
     for prov_idx, (name, slug, pid) in enumerate(selected_provinces, 1):
@@ -280,10 +280,11 @@ def crawl(selected_provinces, log_q, progress_q, stop_event, threads, date_from,
 
         base_url = f"https://vntax.net/tra-cuu-ma-so-thue-theo-tinh/{slug}-{pid}"
         log_q.put(("log", f"{'='*48}"))
-        log_q.put(("log", f"[{prov_idx}/{total_prov}] **{name}**"))
+        max_p = (max_pages_per_prov or {}).get(name) or max_pages_default
+        log_q.put(("log", f"[{prov_idx}/{total_prov}] **{name}** (tối đa {max_p} trang)"))
         all_rows = []
 
-        for page in range(1, 51):
+        for page in range(1, max_p + 1):
             if stop_event.is_set():
                 log_q.put(("log", "⛔ Dừng giữa chừng."))
                 break
@@ -387,13 +388,35 @@ with tab_crawl:
 
         st.divider()
 
-        # Chọn tỉnh
+        # Số trang mặc định
+        st.markdown("**Số trang tối đa (mặc định cho tất cả tỉnh)**")
+        max_pages_default = st.number_input(
+            "Trang", min_value=1, max_value=999, value=999,
+            help="999 = crawl hết, tự dừng khi site hết dữ liệu"
+        )
+
+        st.divider()
+
+        # Chọn tỉnh + override trang
         st.markdown("**Chọn tỉnh thành**")
         chon_tat_ca = st.checkbox("✅ Chọn tất cả", value=False)
         selected = []
+        max_pages_per_prov = {}
         for name, slug, pid in PROVINCES:
-            if st.checkbox(name, value=chon_tat_ca, key=f"chk_{pid}"):
+            col_chk, col_pg = st.columns([3, 2])
+            with col_chk:
+                checked = st.checkbox(name, value=chon_tat_ca, key=f"chk_{pid}")
+            with col_pg:
+                override = st.number_input(
+                    "trang", min_value=1, max_value=999,
+                    value=max_pages_default, key=f"pg_{pid}",
+                    label_visibility="collapsed",
+                    help=f"Số trang riêng cho {name}"
+                )
+            if checked:
                 selected.append((name, slug, pid))
+                if override != max_pages_default:
+                    max_pages_per_prov[name] = override
 
     with col_right:
         st.subheader("📊 Tiến độ")
@@ -475,7 +498,8 @@ with tab_crawl:
             st.session_state.page_prog_text = ""
             threading.Thread(
                 target=crawl,
-                args=(selected, log_q, progress_q, stop_event, threads, None, None),
+                args=(selected, log_q, progress_q, stop_event, threads, None, None,
+                      max_pages_default, max_pages_per_prov),
                 daemon=True,
             ).start()
             st.rerun()
