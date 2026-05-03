@@ -356,7 +356,7 @@ for k, v in [("running", False), ("logs", []), ("results", {}),
               ("stop_event", None), ("log_q", None), ("progress_q", None),
               ("done_count", 0), ("total_selected", 0), ("stopped", False),
               ("page_prog_text", ""), ("page_prog_val", 0.0),
-              ("prov_pages", {p[0]: 999 for p in PROVINCES})]:
+              ("prov_pages", {p[0]: 3 for p in PROVINCES})]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -394,41 +394,50 @@ with tab_crawl:
         col_pg_in, col_pg_btn = st.columns([2, 1])
         with col_pg_in:
             max_pages_global = st.number_input(
-                "Trang", min_value=1, max_value=999, value=999,
+                "Trang", min_value=1, max_value=999, value=3,
                 help="999 = crawl hết, tự dừng khi site hết dữ liệu",
                 disabled=st.session_state.running,
                 label_visibility="collapsed",
             )
         with col_pg_btn:
             if st.button("Áp dụng tất cả", disabled=st.session_state.running):
-                for pname, _, _ in PROVINCES:
-                    st.session_state.prov_pages[pname] = max_pages_global
+                for pname, _, pid in PROVINCES:
+                    st.session_state.prov_pages[pname] = int(max_pages_global)
+                    st.session_state[f"pg_{pid}"] = int(max_pages_global)
                 st.rerun()
 
         st.divider()
 
         # Chọn tỉnh + override trang
         st.markdown("**Chọn tỉnh thành**")
-        chon_tat_ca = st.checkbox("✅ Chọn tất cả", value=False)
+
+        chon_tat_ca = st.checkbox("✅ Chọn tất cả", key="chk_all")
+        if chon_tat_ca:
+            for _, _, pid in PROVINCES:
+                st.session_state[f"chk_{pid}"] = True
+        elif "chk_all_prev" in st.session_state and st.session_state.chk_all_prev:
+            for _, _, pid in PROVINCES:
+                st.session_state[f"chk_{pid}"] = False
+        st.session_state.chk_all_prev = chon_tat_ca
+
         selected = []
         max_pages_per_prov = {}
         for pname, slug, pid in PROVINCES:
+            if f"pg_{pid}" not in st.session_state:
+                st.session_state[f"pg_{pid}"] = st.session_state.prov_pages.get(pname, 3)
             col_chk, col_pg = st.columns([3, 2])
             with col_chk:
-                checked = st.checkbox(pname, value=chon_tat_ca, key=f"chk_{pid}")
+                checked = st.checkbox(pname, key=f"chk_{pid}")
             with col_pg:
-                cur_val = st.session_state.prov_pages.get(pname, 999)
-                new_val = st.number_input(
+                st.number_input(
                     "trang", min_value=1, max_value=999,
-                    value=cur_val, key=f"pg_{pid}",
+                    key=f"pg_{pid}",
                     label_visibility="collapsed",
                     disabled=st.session_state.running,
                 )
-                if new_val != cur_val:
-                    st.session_state.prov_pages[pname] = new_val
             if checked:
                 selected.append((pname, slug, pid))
-                max_pages_per_prov[pname] = st.session_state.prov_pages.get(pname, 999)
+                max_pages_per_prov[pname] = int(st.session_state.get(f"pg_{pid}", 3))
 
     with col_right:
         st.subheader("📊 Tiến độ")
