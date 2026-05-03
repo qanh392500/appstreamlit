@@ -270,7 +270,11 @@ def fetch_detail_worker(args):
     ngay_hd, tinh_trang = parse_detail(html)
     return item, ngay_hd, tinh_trang
 
+<<<<<<< HEAD
 def crawl(selected_provinces, log_q, progress_q, stop_event, threads, date_from, date_to, max_pages_default=50, max_pages_per_prov=None):
+=======
+def crawl(selected_provinces, log_q, progress_q, stop_event, threads, date_from, date_to):
+>>>>>>> 65609c649bef8b8bc2ad2069a4a9e8722542fb78
     total_prov = len(selected_provinces)
 
     for prov_idx, (name, slug, pid) in enumerate(selected_provinces, 1):
@@ -280,11 +284,18 @@ def crawl(selected_provinces, log_q, progress_q, stop_event, threads, date_from,
 
         base_url = f"https://vntax.net/tra-cuu-ma-so-thue-theo-tinh/{slug}-{pid}"
         log_q.put(("log", f"{'='*48}"))
+<<<<<<< HEAD
         max_p = (max_pages_per_prov or {}).get(name) or max_pages_default
         log_q.put(("log", f"[{prov_idx}/{total_prov}] **{name}** (tối đa {max_p} trang)"))
         all_rows = []
 
         for page in range(1, max_p + 1):
+=======
+        log_q.put(("log", f"[{prov_idx}/{total_prov}] **{name}**"))
+        all_rows = []
+
+        for page in range(1, 51):
+>>>>>>> 65609c649bef8b8bc2ad2069a4a9e8722542fb78
             if stop_event.is_set():
                 log_q.put(("log", "⛔ Dừng giữa chừng."))
                 break
@@ -388,6 +399,7 @@ with tab_crawl:
 
         st.divider()
 
+<<<<<<< HEAD
         # Số trang mặc định
         st.markdown("**Số trang tối đa (mặc định cho tất cả tỉnh)**")
         max_pages_default = st.number_input(
@@ -417,6 +429,15 @@ with tab_crawl:
                 selected.append((name, slug, pid))
                 if override != max_pages_default:
                     max_pages_per_prov[name] = override
+=======
+        # Chọn tỉnh
+        st.markdown("**Chọn tỉnh thành**")
+        chon_tat_ca = st.checkbox("✅ Chọn tất cả", value=False)
+        selected = []
+        for name, slug, pid in PROVINCES:
+            if st.checkbox(name, value=chon_tat_ca, key=f"chk_{pid}"):
+                selected.append((name, slug, pid))
+>>>>>>> 65609c649bef8b8bc2ad2069a4a9e8722542fb78
 
     with col_right:
         st.subheader("📊 Tiến độ")
@@ -498,8 +519,12 @@ with tab_crawl:
             st.session_state.page_prog_text = ""
             threading.Thread(
                 target=crawl,
+<<<<<<< HEAD
                 args=(selected, log_q, progress_q, stop_event, threads, None, None,
                       max_pages_default, max_pages_per_prov),
+=======
+                args=(selected, log_q, progress_q, stop_event, threads, None, None),
+>>>>>>> 65609c649bef8b8bc2ad2069a4a9e8722542fb78
                 daemon=True,
             ).start()
             st.rerun()
