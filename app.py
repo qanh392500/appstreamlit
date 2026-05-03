@@ -355,7 +355,8 @@ def crawl(selected_provinces, log_q, progress_q, stop_event, threads, date_from,
 for k, v in [("running", False), ("logs", []), ("results", {}),
               ("stop_event", None), ("log_q", None), ("progress_q", None),
               ("done_count", 0), ("total_selected", 0), ("stopped", False),
-              ("page_prog_text", ""), ("page_prog_val", 0.0)]:
+              ("page_prog_text", ""), ("page_prog_val", 0.0),
+              ("prov_pages", {p[0]: 999 for p in PROVINCES})]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -388,12 +389,21 @@ with tab_crawl:
 
         st.divider()
 
-        # Số trang mặc định
+        # Số trang mặc định + nút áp dụng
         st.markdown("**Số trang tối đa (mặc định cho tất cả tỉnh)**")
-        max_pages_default = st.number_input(
-            "Trang", min_value=1, max_value=999, value=999,
-            help="999 = crawl hết, tự dừng khi site hết dữ liệu"
-        )
+        col_pg_in, col_pg_btn = st.columns([2, 1])
+        with col_pg_in:
+            max_pages_global = st.number_input(
+                "Trang", min_value=1, max_value=999, value=999,
+                help="999 = crawl hết, tự dừng khi site hết dữ liệu",
+                disabled=st.session_state.running,
+                label_visibility="collapsed",
+            )
+        with col_pg_btn:
+            if st.button("Áp dụng tất cả", disabled=st.session_state.running):
+                for pname, _, _ in PROVINCES:
+                    st.session_state.prov_pages[pname] = max_pages_global
+                st.rerun()
 
         st.divider()
 
@@ -402,21 +412,23 @@ with tab_crawl:
         chon_tat_ca = st.checkbox("✅ Chọn tất cả", value=False)
         selected = []
         max_pages_per_prov = {}
-        for name, slug, pid in PROVINCES:
+        for pname, slug, pid in PROVINCES:
             col_chk, col_pg = st.columns([3, 2])
             with col_chk:
-                checked = st.checkbox(name, value=chon_tat_ca, key=f"chk_{pid}")
+                checked = st.checkbox(pname, value=chon_tat_ca, key=f"chk_{pid}")
             with col_pg:
-                override = st.number_input(
+                cur_val = st.session_state.prov_pages.get(pname, 999)
+                new_val = st.number_input(
                     "trang", min_value=1, max_value=999,
-                    value=max_pages_default, key=f"pg_{pid}",
+                    value=cur_val, key=f"pg_{pid}",
                     label_visibility="collapsed",
-                    help=f"Số trang riêng cho {name}"
+                    disabled=st.session_state.running,
                 )
+                if new_val != cur_val:
+                    st.session_state.prov_pages[pname] = new_val
             if checked:
-                selected.append((name, slug, pid))
-                if override != max_pages_default:
-                    max_pages_per_prov[name] = override
+                selected.append((pname, slug, pid))
+                max_pages_per_prov[pname] = st.session_state.prov_pages.get(pname, 999)
 
     with col_right:
         st.subheader("📊 Tiến độ")
@@ -499,7 +511,7 @@ with tab_crawl:
             threading.Thread(
                 target=crawl,
                 args=(selected, log_q, progress_q, stop_event, threads, None, None,
-                      max_pages_default, max_pages_per_prov),
+                      999, max_pages_per_prov),
                 daemon=True,
             ).start()
             st.rerun()
