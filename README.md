@@ -4,7 +4,7 @@ emoji: 🚀
 colorFrom: red
 colorTo: red
 sdk: docker
-app_port: 8501
+app_port: 7860
 tags:
 - streamlit
 pinned: false
