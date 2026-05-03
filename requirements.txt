@@ -1,3 +1,7 @@
-altair
-pandas
 streamlit
+requests
+beautifulsoup4
+openpyxl
+python-docx
+reportlab
+pandas
