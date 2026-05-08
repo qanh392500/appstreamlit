@@ -971,13 +971,17 @@ with tab_lookup:
 </div>
 </body></html>"""
 
-    mst_input = st.text_area(
-        "Mã số thuế (mỗi dòng 1 mã)",
-        placeholder="VD:\n0901101740-003\n0100109106\n1234567890",
-        height=120,
-        label_visibility="collapsed",
-    )
-    btn_lookup = st.button("Tra cứu", type="primary")
+    col_ta, col_cfg = st.columns([3, 1])
+    with col_ta:
+        mst_input = st.text_area(
+            "Mã số thuế (mỗi dòng 1 mã)",
+            placeholder="VD:\n0901101740-003\n0100109106\n1234567890",
+            height=120,
+            label_visibility="collapsed",
+        )
+    with col_cfg:
+        lookup_threads = st.slider("Số luồng", min_value=1, max_value=5, value=3)
+        btn_lookup = st.button("Tra cứu", type="primary", use_container_width=True)
 
     if btn_lookup and mst_input.strip():
         mst_list = [m.strip() for m in mst_input.strip().splitlines() if m.strip()]
@@ -1004,31 +1008,38 @@ with tab_lookup:
                     key="dl_lookup_pdf",
                 )
         else:
-            # Chế độ nhiều MST: gom ZIP
+            # Chế độ nhiều MST: song song → gom ZIP
             log_placeholder = st.empty()
             progress_bar = st.progress(0)
-            zip_buf = io.BytesIO()
             errors = []
+            pdf_results = {}  # mst -> bytes
+            done_count = 0
 
-            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for i, mst in enumerate(mst_list, 1):
-                    log_placeholder.info(f"Đang xử lý: **{mst}** ({i}/{total})...")
-                    progress_bar.progress(i / total)
-                    result, err = lookup_mst(mst)
+            with ThreadPoolExecutor(max_workers=lookup_threads) as ex:
+                future_to_mst = {ex.submit(lookup_mst, mst): mst for mst in mst_list}
+                for future in as_completed(future_to_mst):
+                    mst = future_to_mst[future]
+                    done_count += 1
+                    log_placeholder.info(f"Đang xử lý: **{mst}** ({done_count}/{total})...")
+                    progress_bar.progress(done_count / total)
+                    result, err = future.result()
                     if err or not result:
                         errors.append(f"{mst}: {err or 'Không tìm thấy'}")
                         continue
                     ten, info, nganh_nghe = result["ten"], result["info"], result["nganh_nghe"]
-                    pdf_bytes = lookup_to_pdf(ten, info, nganh_nghe)
-                    mst_safe = mst.replace("/", "-")
-                    zf.writestr(f"{mst_safe}.pdf", pdf_bytes)
+                    pdf_results[mst] = lookup_to_pdf(ten, info, nganh_nghe)
 
-            log_placeholder.success(f"✅ Hoàn thành {total - len(errors)}/{total} mã.")
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for mst, pdf_bytes in pdf_results.items():
+                    zf.writestr(f"{mst.replace('/', '-')}.pdf", pdf_bytes)
+
+            log_placeholder.success(f"✅ Hoàn thành {len(pdf_results)}/{total} mã.")
             if errors:
                 st.warning("Lỗi các mã:\n" + "\n".join(errors))
 
             st.download_button(
-                f"⬇ Tải ZIP ({total - len(errors)} file PDF)",
+                f"⬇ Tải ZIP ({len(pdf_results)} file PDF)",
                 data=zip_buf.getvalue(),
                 file_name="mst_lookup.zip",
                 mime="application/zip",
