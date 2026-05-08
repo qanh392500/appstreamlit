@@ -212,27 +212,41 @@ def to_docx(rows, title):
     doc.save(buf)
     return buf.getvalue()
 
+_FONT_NAME = None
+
+def _load_viet_font():
+    global _FONT_NAME
+    if _FONT_NAME:
+        return _FONT_NAME
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "NotoSans-Regular.ttf"),
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+        "C:/Windows/Fonts/times.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    for fp in candidates:
+        if os.path.exists(fp):
+            try:
+                fname = os.path.splitext(os.path.basename(fp))[0]
+                pdfmetrics.registerFont(TTFont(fname, fp))
+                _FONT_NAME = fname
+                return fname
+            except Exception:
+                pass
+    _FONT_NAME = "Helvetica"
+    return _FONT_NAME
+
+
 def to_pdf(rows, title):
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             leftMargin=20, rightMargin=20,
                             topMargin=30, bottomMargin=30)
 
-    # Try to register a Vietnamese-capable font
-    font_name = "Helvetica"
-    for font_path in [
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/calibri.ttf",
-        "C:/Windows/Fonts/times.ttf",
-    ]:
-        if os.path.exists(font_path):
-            try:
-                fname = os.path.splitext(os.path.basename(font_path))[0]
-                pdfmetrics.registerFont(TTFont(fname, font_path))
-                font_name = fname
-                break
-            except Exception:
-                pass
+    font_name = _load_viet_font()
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("title", fontName=font_name, fontSize=14, spaceAfter=12, alignment=1)
@@ -562,15 +576,7 @@ with tab_crawl:
                     buf = io.BytesIO()
                     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=40, rightMargin=40,
                                             topMargin=30, bottomMargin=30)
-                    font_name = "Helvetica"
-                    for fp in ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/calibri.ttf"]:
-                        if os.path.exists(fp):
-                            try:
-                                fn = os.path.splitext(os.path.basename(fp))[0]
-                                pdfmetrics.registerFont(TTFont(fn, fp))
-                                font_name = fn; break
-                            except Exception:
-                                pass
+                    font_name = _load_viet_font()
                     ts = ParagraphStyle("t", fontName=font_name, fontSize=13, spaceAfter=10, alignment=1)
                     cs = ParagraphStyle("c", fontName=font_name, fontSize=9, leading=12)
                     story = [Paragraph(title, ts), Spacer(1, 8)]
@@ -789,9 +795,10 @@ def lookup_mst(mst_raw):
         return None, "Không thể kết nối hoặc không tìm thấy MST."
     soup = BeautifulSoup(html, "html.parser")
 
-    # Tên công ty từ h1
+    # Tên công ty từ h1, bỏ phần "mã - " ở đầu
     h1 = soup.find("h1")
     ten_ct = h1.get_text(strip=True) if h1 else ""
+    ten_ct = re.sub(r'^[\d\-]+\s*-\s*', '', ten_ct).strip()
 
     # Parse các trường từ grid rows (sm:col-span-3 = label, sm:col-span-9 = value)
     info = {}
@@ -834,23 +841,7 @@ def lookup_to_pdf(ten, info, nganh_nghe):
                             leftMargin=40, rightMargin=40,
                             topMargin=40, bottomMargin=40)
 
-    font_name = "Helvetica"
-    for fp in [
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/calibri.ttf",
-        "C:/Windows/Fonts/times.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-    ]:
-        if os.path.exists(fp):
-            try:
-                fn = os.path.splitext(os.path.basename(fp))[0]
-                pdfmetrics.registerFont(TTFont(fn, fp))
-                font_name = fn
-                break
-            except Exception:
-                pass
+    font_name = _load_viet_font()
 
     title_style  = ParagraphStyle("t", fontName=font_name, fontSize=13, spaceAfter=14,
                                    textColor=colors.HexColor("#1a56db"), leading=18)
@@ -981,9 +972,11 @@ with tab_lookup:
         )
     with col_cfg:
         lookup_threads = st.slider("Số luồng", min_value=1, max_value=5, value=3)
+        filename_mode = st.radio("Tên file PDF", ["Tên công ty", "Mã + Tên"], index=0, key="filename_mode")
         btn_lookup = st.button("Tra cứu", type="primary", use_container_width=True)
 
     if btn_lookup and mst_input.strip():
+        filename_mode = st.session_state.get("filename_mode", "Tên công ty")
         mst_list = [m.strip() for m in mst_input.strip().splitlines() if m.strip()]
         total = len(mst_list)
 
@@ -999,11 +992,13 @@ with tab_lookup:
                 height = 120 + len([v for v in info.values() if v]) * 42 + len(nganh_nghe) * 34 + (80 if nganh_nghe else 0)
                 components.html(html_card, height=height, scrolling=True)
                 st.divider()
+                ten_safe = re.sub(r'[\\/:*?"<>|]', '_', ten).strip() or mst_list[0].replace("/", "-")
                 mst_safe = mst_list[0].replace("/", "-")
+                fname = ten_safe if filename_mode == "Tên công ty" else f"{mst_safe} - {ten_safe}"
                 st.download_button(
                     "⬇ Tải PDF",
                     data=lookup_to_pdf(ten, info, nganh_nghe),
-                    file_name=f"{mst_safe}.pdf",
+                    file_name=f"{fname}.pdf",
                     mime="application/pdf",
                     key="dl_lookup_pdf",
                 )
@@ -1027,12 +1022,15 @@ with tab_lookup:
                         errors.append(f"{mst}: {err or 'Không tìm thấy'}")
                         continue
                     ten, info, nganh_nghe = result["ten"], result["info"], result["nganh_nghe"]
-                    pdf_results[mst] = lookup_to_pdf(ten, info, nganh_nghe)
+                    ten_safe = re.sub(r'[\\/:*?"<>|]', '_', ten).strip() or mst.replace("/", "-")
+                    mst_safe = mst.replace("/", "-")
+                    fname = ten_safe if filename_mode == "Tên công ty" else f"{mst_safe} - {ten_safe}"
+                    pdf_results[fname] = lookup_to_pdf(ten, info, nganh_nghe)
 
             zip_buf = io.BytesIO()
             with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for mst, pdf_bytes in pdf_results.items():
-                    zf.writestr(f"{mst.replace('/', '-')}.pdf", pdf_bytes)
+                for ten_safe, pdf_bytes in pdf_results.items():
+                    zf.writestr(f"{ten_safe}.pdf", pdf_bytes)
 
             log_placeholder.success(f"✅ Hoàn thành {len(pdf_results)}/{total} mã.")
             if errors:
