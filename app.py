@@ -364,7 +364,7 @@ for k, v in [("running", False), ("logs", []), ("results", {}),
 st.title("🏢 VnTax Crawler")
 st.caption("Tra cứu mã số thuế theo tỉnh thành — vntax.net")
 
-tab_crawl, tab_filter = st.tabs(["🔍 Crawl dữ liệu", "📅 Lọc file"])
+tab_crawl, tab_filter, tab_lookup = st.tabs(["🔍 Crawl dữ liệu", "📅 Lọc file", "🔎 Tra cứu MST"])
 
 # ════════════════════════════════════════════════════════════════
 # TAB 1: CRAWL
@@ -753,3 +753,284 @@ with tab_filter:
                 st.error(f"Lỗi đọc file: {e}")
         else:
             st.info("Upload file Excel hoặc CSV để bắt đầu lọc.")
+
+# ════════════════════════════════════════════════════════════════
+# TAB 3: TRA CỨU MST
+# ════════════════════════════════════════════════════════════════
+
+def lookup_mst(mst_raw):
+    mst = mst_raw.strip()
+    sess = make_session()
+    stop = threading.Event()
+
+    # Dùng search để lấy URL đúng (tránh redirect về trang mẹ)
+    search_html = fetch(sess, f"https://vntax.net/search?q={mst}", stop)
+    target_url = f"https://vntax.net/{mst}"
+    if search_html:
+        soup_s = BeautifulSoup(search_html, "html.parser")
+        # URL sau redirect của search chính là trang đúng
+        # Hoặc tìm link đầu tiên khớp MST
+        for a in soup_s.find_all("a", href=True):
+            href = a["href"]
+            if href.startswith(f"/{mst}-") or href == f"/{mst}":
+                target_url = "https://vntax.net" + href
+                break
+
+    # Nếu search redirect thẳng về trang chi tiết
+    try:
+        r = sess.get(f"https://vntax.net/search?q={mst}", timeout=30, allow_redirects=True)
+        if f"/{mst}" in r.url and r.url != f"https://vntax.net/search?q={mst}":
+            target_url = r.url
+    except Exception:
+        pass
+
+    html = fetch(sess, target_url, stop)
+    if not html:
+        return None, "Không thể kết nối hoặc không tìm thấy MST."
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Tên công ty từ h1
+    h1 = soup.find("h1")
+    ten_ct = h1.get_text(strip=True) if h1 else ""
+
+    # Parse các trường từ grid rows (sm:col-span-3 = label, sm:col-span-9 = value)
+    info = {}
+    rows = soup.select("div.grid.grid-cols-1.sm\:grid-cols-12")
+    for row in rows:
+        label_div = row.select_one("div.sm\:col-span-3")
+        value_div = row.select_one("div.sm\:col-span-9")
+        if not label_div or not value_div:
+            continue
+        # Bỏ icon span trước khi lấy text
+        for span in label_div.find_all("span"):
+            span.decompose()
+        label = label_div.get_text(strip=True)
+        # Số điện thoại: lấy data-full thay vì text bị mask
+        phone_span = value_div.find("span", attrs={"data-full": True})
+        if phone_span:
+            value = phone_span["data-full"]
+        else:
+            value = value_div.get_text(strip=True)
+            value = re.sub(r'Hiển thị\s*$', '', value).strip()
+        if label:
+            info[label] = value
+
+    # Bảng ngành nghề kinh doanh
+    nganh_nghe = []
+    for div in soup.select("div.grid-cols-12"):
+        ma_div = div.select_one(".col-span-2")
+        nganh_div = div.select_one(".col-span-10")
+        if ma_div and nganh_div:
+            ma = ma_div.get_text(strip=True)
+            if ma.isdigit() and len(ma) == 4:
+                nganh_nghe.append({"Mã": ma, "Ngành": nganh_div.get_text(" ", strip=True)})
+
+    return {"ten": ten_ct, "info": info, "nganh_nghe": nganh_nghe}, None
+
+
+def lookup_to_pdf(ten, info, nganh_nghe):
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=40, rightMargin=40,
+                            topMargin=40, bottomMargin=40)
+
+    font_name = "Helvetica"
+    for fp in [
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+        "C:/Windows/Fonts/times.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]:
+        if os.path.exists(fp):
+            try:
+                fn = os.path.splitext(os.path.basename(fp))[0]
+                pdfmetrics.registerFont(TTFont(fn, fp))
+                font_name = fn
+                break
+            except Exception:
+                pass
+
+    title_style  = ParagraphStyle("t", fontName=font_name, fontSize=13, spaceAfter=14,
+                                   textColor=colors.HexColor("#1a56db"), leading=18)
+    label_style  = ParagraphStyle("l", fontName=font_name, fontSize=9,
+                                   textColor=colors.HexColor("#6b7280"))
+    value_style  = ParagraphStyle("v", fontName=font_name, fontSize=10, leading=14)
+    head_style   = ParagraphStyle("h", fontName=font_name, fontSize=10, spaceAfter=6,
+                                   textColor=colors.white)
+    cell_style   = ParagraphStyle("c", fontName=font_name, fontSize=9, leading=12)
+
+    story = [Paragraph(ten, title_style)]
+
+    for field, val in info.items():
+        if not val:
+            continue
+        row_data = [[Paragraph(field, label_style), Paragraph(val, value_style)]]
+        t = Table(row_data, colWidths=[120, 350])
+        t.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("TOPPADDING", (0,0), (-1,-1), 6),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ("LINEBELOW", (0,0), (-1,-1), 0.3, colors.HexColor("#e5e7eb")),
+        ]))
+        story.append(t)
+
+    if nganh_nghe:
+        story.append(Spacer(1, 14))
+        story.append(Paragraph("Ngành nghề kinh doanh", ParagraphStyle(
+            "nn", fontName=font_name, fontSize=11, spaceAfter=6,
+            textColor=colors.HexColor("#1a56db"))))
+        data = [[Paragraph("<b>Mã</b>", cell_style), Paragraph("<b>Ngành</b>", cell_style)]]
+        for nn in nganh_nghe:
+            data.append([Paragraph(nn["Mã"], cell_style), Paragraph(nn["Ngành"], cell_style)])
+        tbl = Table(data, colWidths=[60, 410], repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1a56db")),
+            ("TEXTCOLOR",  (0,0), (-1,0), colors.white),
+            ("GRID",       (0,0), (-1,-1), 0.3, colors.HexColor("#e5e7eb")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f9fafb")]),
+            ("VALIGN",     (0,0), (-1,-1), "TOP"),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ]))
+        story.append(tbl)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+with tab_lookup:
+    st.subheader("🔎 Tra cứu thông tin doanh nghiệp theo MST")
+    st.caption("Nhập mã số thuế để lấy toàn bộ thông tin từ vntax.net")
+
+    import streamlit.components.v1 as components
+
+    ICONS = {
+        "Mã số thuế":     "🧾",
+        "Địa chỉ thuế":   "📍",
+        "Địa chỉ":        "📌",
+        "Tình trạng":     "✅",
+        "Người đại diện": "👤",
+        "Điện thoại":     "📞",
+        "Ngày hoạt động": "📅",
+        "Quản lý bởi":    "🏛️",
+        "Loại hình DN":   "🏢",
+        "Ngành":          "🏭",
+        "Tên quốc tế":    "🌐",
+        "Tên viết tắt":   "✏️",
+    }
+
+    def build_html_card(ten, info, nganh_nghe):
+        rows_html = ""
+        for field, val in info.items():
+            if not val:
+                continue
+            icon = ICONS.get(field, "•")
+            if field == "Tình trạng":
+                val_style = "color:#16a34a;font-weight:600;"
+            elif field == "Người đại diện":
+                val_style = "color:#1a56db;font-weight:600;"
+            elif field == "Mã số thuế":
+                val_style = "font-weight:600;"
+            else:
+                val_style = ""
+            rows_html += f"""<div style="display:grid;grid-template-columns:180px 1fr;padding:10px 16px;border-bottom:1px solid #f3f4f6;gap:8px;align-items:start;">
+  <div style="color:#6b7280;font-size:13px;display:flex;align-items:center;gap:6px;">{icon} {field}</div>
+  <div style="font-size:14px;{val_style}">{val}</div>
+</div>"""
+
+        nganh_table = ""
+        if nganh_nghe:
+            rows_nn = ""
+            for i, nn in enumerate(nganh_nghe):
+                bg = "#f9fafb" if i % 2 else "#ffffff"
+                rows_nn += f"""<tr style="background:{bg};">
+  <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:13px;">{nn['Mã']}</td>
+  <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:13px;">{nn['Ngành']}</td>
+</tr>"""
+            nganh_table = f"""<div style="padding:16px;">
+  <p style="font-weight:600;font-size:14px;margin:0 0 8px;">Ngành nghề kinh doanh</p>
+  <table style="width:100%;border-collapse:collapse;">
+    <thead><tr style="background:#1a56db;color:white;">
+      <th style="padding:8px 10px;border:1px solid #1a56db;font-size:13px;width:70px;text-align:left;">Mã</th>
+      <th style="padding:8px 10px;border:1px solid #1a56db;font-size:13px;text-align:left;">Ngành</th>
+    </tr></thead>
+    <tbody>{rows_nn}</tbody>
+  </table>
+</div>"""
+
+        return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head><body style="margin:0;padding:8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+<div style="background:white;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.12);border:1px solid #e5e7eb;overflow:hidden;">
+  <div style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
+    <h1 style="font-size:15px;font-weight:600;color:#1a56db;text-transform:uppercase;margin:0;line-height:1.4;">{ten}</h1>
+  </div>
+  <div>{rows_html}</div>
+  {nganh_table}
+</div>
+</body></html>"""
+
+    mst_input = st.text_area(
+        "Mã số thuế (mỗi dòng 1 mã)",
+        placeholder="VD:\n0901101740-003\n0100109106\n1234567890",
+        height=120,
+        label_visibility="collapsed",
+    )
+    btn_lookup = st.button("Tra cứu", type="primary")
+
+    if btn_lookup and mst_input.strip():
+        mst_list = [m.strip() for m in mst_input.strip().splitlines() if m.strip()]
+        total = len(mst_list)
+
+        if total == 1:
+            # Chế độ đơn: hiển thị card + tải PDF riêng
+            with st.spinner("Đang tra cứu..."):
+                result, err = lookup_mst(mst_list[0])
+            if err:
+                st.error(err)
+            elif result:
+                ten, info, nganh_nghe = result["ten"], result["info"], result["nganh_nghe"]
+                html_card = build_html_card(ten, info, nganh_nghe)
+                height = 120 + len([v for v in info.values() if v]) * 42 + len(nganh_nghe) * 34 + (80 if nganh_nghe else 0)
+                components.html(html_card, height=height, scrolling=True)
+                st.divider()
+                mst_safe = mst_list[0].replace("/", "-")
+                st.download_button(
+                    "⬇ Tải PDF",
+                    data=lookup_to_pdf(ten, info, nganh_nghe),
+                    file_name=f"{mst_safe}.pdf",
+                    mime="application/pdf",
+                    key="dl_lookup_pdf",
+                )
+        else:
+            # Chế độ nhiều MST: gom ZIP
+            log_placeholder = st.empty()
+            progress_bar = st.progress(0)
+            zip_buf = io.BytesIO()
+            errors = []
+
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for i, mst in enumerate(mst_list, 1):
+                    log_placeholder.info(f"Đang xử lý: **{mst}** ({i}/{total})...")
+                    progress_bar.progress(i / total)
+                    result, err = lookup_mst(mst)
+                    if err or not result:
+                        errors.append(f"{mst}: {err or 'Không tìm thấy'}")
+                        continue
+                    ten, info, nganh_nghe = result["ten"], result["info"], result["nganh_nghe"]
+                    pdf_bytes = lookup_to_pdf(ten, info, nganh_nghe)
+                    mst_safe = mst.replace("/", "-")
+                    zf.writestr(f"{mst_safe}.pdf", pdf_bytes)
+
+            log_placeholder.success(f"✅ Hoàn thành {total - len(errors)}/{total} mã.")
+            if errors:
+                st.warning("Lỗi các mã:\n" + "\n".join(errors))
+
+            st.download_button(
+                f"⬇ Tải ZIP ({total - len(errors)} file PDF)",
+                data=zip_buf.getvalue(),
+                file_name="mst_lookup.zip",
+                mime="application/zip",
+                key="dl_lookup_zip",
+            )
